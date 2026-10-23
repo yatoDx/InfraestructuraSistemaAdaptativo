@@ -84,11 +84,7 @@ En Windows se requiere:
 
 ### 3.2. Ubicación del proyecto
 
-Abrir PowerShell en la raíz del proyecto:
-
-```powershell
-cd C:\Users\yatoG\Downloads\proyecto\proyecto
-```
+Abrir PowerShell o terminal preferida la raíz del proyecto:
 
 ## 4. Preparación inicial
 
