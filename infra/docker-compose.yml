@@ -1,0 +1,102 @@
+name: anomalias-lab
+
+# Topología (una red virtual por zona; todo el tráfico entre zonas pasa por el firewall):
+#   ext  172.30.0.0/24  destino externo controlado
+#   dmz  172.30.1.0/24  servidor web
+#   lan  172.30.2.0/24  estaciones de trabajo y nodo atacante simulado
+#   srv  172.30.3.0/24  servidor de autenticación y servidor de archivos
+#   mgmt 172.30.4.0/24  colector
+# El firewall tiene la IP .254 en cada zona.
+
+x-node: &node
+  build: { context: ./node }
+  cap_add: [NET_ADMIN]
+  working_dir: /app
+  restart: unless-stopped
+  volumes:
+    - ..:/app:ro
+    - ../data:/data
+
+networks:
+  ext:  { driver: bridge, ipam: { config: [{ subnet: 172.30.0.0/24 }] } }
+  dmz:  { driver: bridge, ipam: { config: [{ subnet: 172.30.1.0/24 }] } }
+  lan:  { driver: bridge, ipam: { config: [{ subnet: 172.30.2.0/24 }] } }
+  srv:  { driver: bridge, ipam: { config: [{ subnet: 172.30.3.0/24 }] } }
+  mgmt: { driver: bridge, ipam: { config: [{ subnet: 172.30.4.0/24 }] } }
+
+services:
+  firewall:
+    build: { context: ./firewall }
+    container_name: lab-firewall
+    cap_add: [NET_ADMIN, NET_RAW]
+    sysctls:
+      net.ipv4.ip_forward: 1
+    volumes:
+      - ../data:/data
+    networks:
+      ext:  { ipv4_address: 172.30.0.254 }
+      dmz:  { ipv4_address: 172.30.1.254 }
+      lan:  { ipv4_address: 172.30.2.254 }
+      srv:  { ipv4_address: 172.30.3.254 }
+      mgmt: { ipv4_address: 172.30.4.254 }
+
+  web:
+    <<: *node
+    container_name: lab-web
+    command: python infra/services/lab_services.py web
+    environment: { FW_GW: 172.30.1.254, SELF_IP: 172.30.1.10 }
+    networks: { dmz: { ipv4_address: 172.30.1.10 } }
+
+  auth:
+    <<: *node
+    container_name: lab-auth
+    command: python infra/services/lab_services.py auth
+    environment: { FW_GW: 172.30.3.254, SELF_IP: 172.30.3.10 }
+    networks: { srv: { ipv4_address: 172.30.3.10 } }
+
+  fileserver:
+    <<: *node
+    container_name: lab-fileserver
+    command: python infra/services/lab_services.py files
+    environment: { FW_GW: 172.30.3.254, SELF_IP: 172.30.3.20 }
+    networks: { srv: { ipv4_address: 172.30.3.20 } }
+
+  exfil:
+    <<: *node
+    container_name: lab-exfil
+    command: python infra/services/lab_services.py sink
+    environment: { FW_GW: 172.30.0.254, SELF_IP: 172.30.0.20 }
+    networks: { ext: { ipv4_address: 172.30.0.20 } }
+
+  client1:
+    <<: *node
+    container_name: lab-client1
+    command: python -m generators.normal_traffic --duration 0 --seed 1
+    environment: { FW_GW: 172.30.2.254, SELF_IP: 172.30.2.31 }
+    networks: { lan: { ipv4_address: 172.30.2.31 } }
+
+  client2:
+    <<: *node
+    container_name: lab-client2
+    command: python -m generators.normal_traffic --duration 0 --seed 2
+    environment: { FW_GW: 172.30.2.254, SELF_IP: 172.30.2.32 }
+    networks: { lan: { ipv4_address: 172.30.2.32 } }
+
+  attacker:
+    <<: *node
+    container_name: lab-attacker
+    # Hace tráfico normal de fondo; los escenarios se lanzan a mano (ver Makefile)
+    command: python -m generators.normal_traffic --duration 0 --seed 3 --rate 0.2
+    environment: { FW_GW: 172.30.2.254, SELF_IP: 172.30.2.99 }
+    networks: { lan: { ipv4_address: 172.30.2.99 } }
+
+  collector:
+    build: { context: ./collector }
+    container_name: lab-collector
+    working_dir: /app
+    restart: unless-stopped
+    command: python -m capture.collect_loop
+    volumes:
+      - ..:/app:ro
+      - ../data:/data
+    networks: { mgmt: { ipv4_address: 172.30.4.10 } }

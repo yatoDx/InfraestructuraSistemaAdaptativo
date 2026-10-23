@@ -1,0 +1,17 @@
+# Reglas del firewall del laboratorio.
+# Política base: aceptar (modo monitoreo). Las IP del conjunto "blocklist" se descartan;
+# cada elemento expira solo al cumplirse su timeout, lo que materializa la reversión automática.
+table inet lab
+delete table inet lab
+
+table inet lab {
+  set blocklist {
+    type ipv4_addr
+    flags timeout
+  }
+
+  chain forward {
+    type filter hook forward priority 0; policy accept;
+    ip saddr @blocklist counter log prefix "LAB-BLOCK " drop
+  }
+}
