@@ -1,0 +1,53 @@
+# Parámetros del laboratorio (Sección de Diseño). Todo se puede sobrescribir por línea de comandos
+# (python -m src.run_pipeline --help) o con otro archivo: --config ruta.yaml  /  LAB_CONFIG=ruta.yaml
+# Si falta este archivo o PyYAML, se usan los mismos valores por defecto definidos en src/config.py.
+
+window_s: 10                  # tamaño de la ventana temporal (s)
+
+# Partición temporal de las ventanas: entrenamiento (solo tráfico normal) -> validación -> prueba.
+# La prueba es lo que queda (1 - train - validation) y no se usa para ajustar nada.
+split:
+  train: 0.4
+  validation: 0.2
+
+detectors:
+  weights: {zscore: 0.25, iqr: 0.25, iforest: 0.25, ocsvm: 0.25}   # pesos iguales de partida
+  alpha: 0.6                                                        # 0.6*promedio + 0.4*máximo
+  vote: 0.5                                                         # puntaje a partir del cual un detector "vota"
+
+risk:
+  alert: 50                   # alerta (umbral fijo; con calibración se reemplaza por el calibrado, acotado a alert_min-alert_max)
+  rate_limit: 60              # 60-69: limitar tasa del origen (nftables limit)
+  block: 70                   # 70-84: bloqueo temporal
+  isolate: 85                 # >=85: aislamiento temporal (se descarta tráfico desde y hacia el nodo)
+  calibrate: true             # ajustar el umbral de alerta con la ventana de validación
+  target_fpr: 0.01            # tasa de falsos positivos tolerada sobre ventanas normales de validación
+  alert_min: 30
+  alert_max: 70
+
+response:
+  ttl_rate_limit: 120         # s
+  ttl_block_base: 120         # s, crece con el riesgo
+  ttl_block_max: 900
+  ttl_per_point: 20           # s extra por punto de riesgo sobre el umbral de bloqueo
+  ttl_isolate: 600
+  rate_pps: 20                # paquetes/s permitidos a un origen limitado
+  persist: 1                  # alertas consecutivas necesarias antes de actuar
+
+forecast:
+  history: 4
+  horizon: 3
+  max_gap: 6
+
+# Topología: debe coincidir con infra/docker-compose.yml. crit = criticidad del activo (0-1).
+default_crit: 0.3
+nodes:
+  172.30.0.20: {name: exfil,      zone: ext,  crit: 0.8}
+  172.30.1.10: {name: web,        zone: dmz,  crit: 0.6}
+  172.30.2.31: {name: client1,    zone: lan,  crit: 0.4}
+  172.30.2.32: {name: client2,    zone: lan,  crit: 0.4}
+  172.30.2.99: {name: attacker,   zone: lan,  crit: 0.4}
+  172.30.3.10: {name: auth,       zone: srv,  crit: 0.9}
+  172.30.3.20: {name: fileserver, zone: srv,  crit: 1.0}
+  172.30.4.10: {name: collector,  zone: mgmt, crit: 0.5}
+protected_zones: [srv, dmz, mgmt]   # nunca se limitan, bloquean ni aíslan automáticamente

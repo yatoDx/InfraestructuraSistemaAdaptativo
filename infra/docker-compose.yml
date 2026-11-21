@@ -17,12 +17,15 @@ x-node: &node
     - ..:/app:ro
     - ../data:/data
 
+# Todas las redes son internas (internal: true): ningún contenedor tiene salida a Internet ni al equipo
+# anfitrión; solo se comunican entre sí a través del firewall. El acceso a Internet se usa únicamente al
+# construir las imágenes (apt/pip), no al ejecutar el laboratorio. Se comprueba con scripts/verify_lab.sh.
 networks:
-  ext:  { driver: bridge, ipam: { config: [{ subnet: 172.30.0.0/24 }] } }
-  dmz:  { driver: bridge, ipam: { config: [{ subnet: 172.30.1.0/24 }] } }
-  lan:  { driver: bridge, ipam: { config: [{ subnet: 172.30.2.0/24 }] } }
-  srv:  { driver: bridge, ipam: { config: [{ subnet: 172.30.3.0/24 }] } }
-  mgmt: { driver: bridge, ipam: { config: [{ subnet: 172.30.4.0/24 }] } }
+  ext:  { driver: bridge, internal: true, ipam: { config: [{ subnet: 172.30.0.0/24 }] } }
+  dmz:  { driver: bridge, internal: true, ipam: { config: [{ subnet: 172.30.1.0/24 }] } }
+  lan:  { driver: bridge, internal: true, ipam: { config: [{ subnet: 172.30.2.0/24 }] } }
+  srv:  { driver: bridge, internal: true, ipam: { config: [{ subnet: 172.30.3.0/24 }] } }
+  mgmt: { driver: bridge, internal: true, ipam: { config: [{ subnet: 172.30.4.0/24 }] } }
 
 services:
   firewall:

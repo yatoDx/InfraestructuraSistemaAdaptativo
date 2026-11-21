@@ -6,3 +6,5 @@ matplotlib
 pyarrow
 streamlit
 scapy
+pyyaml
+pytest
