@@ -1,0 +1,270 @@
+\documentclass[conference]{IEEEtran}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage{placeins}
+\lstset{
+  basicstyle=\ttfamily\scriptsize, breaklines=true, columns=fullflexible, keepspaces=true,
+  frame=single, aboveskip=4pt, belowskip=4pt, upquote=true,
+  literate={á}{{\'a}}1 {é}{{\'e}}1 {í}{{\'i}}1 {ó}{{\'o}}1 {ú}{{\'u}}1 {ñ}{{\~n}}1
+           {Á}{{\'A}}1 {É}{{\'E}}1 {Í}{{\'I}}1 {Ó}{{\'O}}1 {Ú}{{\'U}}1 {Ñ}{{\~N}}1
+           {→}{{->}}2 {≥}{{>=}}2 {—}{{--}}1 {¿}{{?`}}1 {¡}{{!`}}1
+}
+\newcommand{\cmd}[1]{\texttt{#1}}
+\newcounter{codigo}
+\newcommand{\codigo}[2]{\par\refstepcounter{codigo}\label{#2}{\footnotesize\textbf{Código \thecodigo.} #1}\par\nopagebreak}
+
+\begin{document}
+\title{Guía paso a paso del laboratorio: máquina virtual, red simulada, pipeline de detección y respuesta reversible}
+\author{
+\IEEEauthorblockN{Juan Esteban Buitrago Chavez}
+\IEEEauthorblockA{Facultad de Ingeniería - Universidad Distrital Francisco José de Caldas\\
+Asignatura: 020-81 Mecanismos de Seguridad Informática}
+}
+\maketitle
+
+\begin{abstract}
+Este documento complementa el anteproyecto con la guía operativa para reproducir el laboratorio de principio a fin: preparación de la máquina virtual Ubuntu Server en VirtualBox, despliegue de la red simulada con Docker, captura de tráfico, ejecución de los tres escenarios, procesamiento con el pipeline de detección, respuesta escalonada con nftables y verificación automática. Se incluyen los fragmentos de código que sostienen cada decisión de diseño y una lista de comprobación para validar el entorno.
+\end{abstract}
+
+\section{Alcance y requisitos}
+El laboratorio es una red empresarial \emph{simulada}: nueve contenedores distribuidos en cinco zonas, con un firewall que intermedia todo el tráfico entre ellas. Todo el tráfico de ataque se genera dentro de esa red y los generadores solo aceptan destinos en \cmd{172.30.0.0/16}. La Tabla~\ref{tab:req} resume los requisitos de la máquina virtual.
+
+\begin{table}[htbp]
+\centering
+\caption{Requisitos de la máquina virtual}
+\label{tab:req}
+\footnotesize
+\begin{tabular}{@{}ll@{}}
+\toprule
+Elemento & Valor recomendado \\
+\midrule
+Hipervisor & VirtualBox 7.x \\
+Sistema & Ubuntu Server 22.04 o 24.04 LTS \\
+CPU / RAM / disco & 4 vCPU / 8 GB / 40 GB \\
+Red de la VM & Adaptador 1 en NAT (solo para instalar) \\
+Software & Docker Engine, Compose, Python 3 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Máquina virtual en VirtualBox}
+\subsection{Creación de la VM}
+\begin{enumerate}
+\item En VirtualBox: \emph{Nueva} $\rightarrow$ tipo Linux, versión Ubuntu (64-bit); asignar 8192 MB de RAM, 4 CPU y un disco VDI dinámico de 40 GB.
+\item Montar la ISO de Ubuntu Server e instalar con la configuración por defecto; activar \emph{OpenSSH server} para administrar la VM desde el equipo anfitrión.
+\item Para entrar por SSH, en \emph{Configuración $\rightarrow$ Red $\rightarrow$ Reenvío de puertos} crear la regla TCP \cmd{127.0.0.1:2222} $\rightarrow$ \cmd{22}, y conectar con \cmd{ssh -p 2222 usuario@127.0.0.1}.
+\item Tras el primer arranque: \cmd{sudo apt update \&\& sudo apt -y upgrade}.
+\end{enumerate}
+
+\subsection{Preparación automática}
+El repositorio incluye \cmd{scripts/setup\_ubuntu.sh}, que instala Docker Engine desde el repositorio oficial, añade al usuario al grupo \cmd{docker}, crea el entorno virtual \cmd{.venv} e instala \cmd{requirements.txt}.
+\begin{lstlisting}[language=bash]
+git clone https://github.com/yatoDx/InfraestructuraSistemaAdaptativo.git
+cd InfraestructuraSistemaAdaptativo
+make setup                  # Docker + .venv
+newgrp docker               # o cerrar y abrir sesion
+source .venv/bin/activate
+\end{lstlisting}
+\codigo{Clonación y preparación del entorno.}{cod:setup}
+
+\subsection{Comprobación previa sin Docker}
+Antes de levantar la red conviene validar el código con las 36 pruebas automáticas (unitarias e integración sobre datos sintéticos):
+\begin{lstlisting}[language=bash]
+make test                   # python -m pytest -q
+make synth && make pipeline-synth
+\end{lstlisting}
+Si algo falla aquí, el problema está en el entorno Python y no en la red.
+
+\section{Estructura del repositorio}
+Los parámetros viven en \cmd{config/lab.yaml}; \cmd{src/config.py} solo aporta valores por defecto. La Tabla~\ref{tab:repo} resume los directorios.
+
+\begin{table}[htbp]
+\centering
+\caption{Directorios principales del repositorio}
+\label{tab:repo}
+\footnotesize
+\begin{tabular}{@{}lp{5.2cm}@{}}
+\toprule
+Ruta & Contenido \\
+\midrule
+\cmd{config/lab.yaml} & Parámetros y topología \\
+\cmd{infra/} & Compose, firewall (nftables), nodos, servicios \\
+\cmd{generators/} & Tráfico normal y escenarios de ataque \\
+\cmd{capture/} & PCAP a flujos (scapy) \\
+\cmd{src/} & Ventanas, detectores, fusión, explicación, respuesta, pronóstico \\
+\cmd{dashboard/} & Tablero Streamlit \\
+\cmd{tests/} & Pruebas unitarias y de integración \\
+\cmd{scripts/} & Preparación y verificación del laboratorio \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Despliegue de la red simulada}
+\subsection{Topología}
+Cinco redes \cmd{bridge} (ext, dmz, lan, srv, mgmt; \cmd{172.30.0.0/24}\ldots\cmd{172.30.4.0/24}) y un firewall con la IP \cmd{.254} en cada una. Los nodos usan el firewall como puerta de enlace, de modo que todo el tráfico entre zonas queda visible para la captura.
+
+\subsection{Aislamiento de Internet}
+Cada red se declara con \cmd{internal: true}: Docker no crea ruta de salida ni NAT, por lo que ningún contenedor alcanza Internet ni el anfitrión. Internet solo se usa al construir las imágenes.
+\begin{lstlisting}[language=bash]
+networks:
+  ext:  { driver: bridge, internal: true,
+          ipam: { config: [{ subnet: 172.30.0.0/24 }] } }
+  lan:  { driver: bridge, internal: true,
+          ipam: { config: [{ subnet: 172.30.2.0/24 }] } }
+  # dmz, srv y mgmt siguen el mismo patron
+\end{lstlisting}
+\codigo{Redes internas en \cmd{infra/docker-compose.yml}.}{cod:compose}
+
+\subsection{Arranque}
+\begin{lstlisting}[language=bash]
+make up        # construye y levanta los 9 contenedores
+make status    # todos "Up"
+make verify    # comprobaciones automaticas
+\end{lstlisting}
+\codigo{Arranque y verificación.}{cod:up}
+\cmd{scripts/verify\_lab.sh} revisa: (1) los nueve contenedores en ejecución, (2) las cinco redes con \cmd{Internal=true} y una conexión activa a \cmd{1.1.1.1:53} que \emph{debe fallar} desde tres contenedores, (3) la tabla \cmd{inet lab} con los conjuntos \cmd{ratelimit}, \cmd{blocklist} e \cmd{isolate} con \emph{timeout} y el reenvío IP, (4) conectividad entre zonas a través del firewall y (5) la existencia de PCAP y flujos. Termina con código de salida distinto de cero si algo falla.
+
+\section{Captura y línea base}
+El firewall ejecuta \cmd{tcpdump} con paquetes truncados a 96 bytes y rotación cada 60 s hacia \cmd{data/pcap/}. El colector convierte cada archivo a flujos (Parquet) en \cmd{data/flows/}. Los generadores producen tráfico normal (navegación, consultas de autenticación y transferencias de archivos).
+
+\textbf{Deje correr el laboratorio entre 20 y 30 minutos sin ataques}: el primer 40\,\% de la captura se usa para entrenar los detectores solo con tráfico normal.
+
+\section{Escenarios de ataque}
+\begin{lstlisting}[language=bash]
+make scan     # escaneo de puertos (attacker -> srv, dmz)
+make brute    # fuerza bruta contra el servicio de autenticacion
+make exfil    # exfiltracion hacia el destino externo controlado
+\end{lstlisting}
+\codigo{Ejecución de los tres escenarios.}{cod:escenarios}
+Cada escenario registra su verdad de terreno (intervalo, origen, destino) en \cmd{data/labels.jsonl}. La función \cmd{assert\_lab\_target} rechaza cualquier destino fuera de \cmd{172.30.}$\ast$, como segunda barrera de seguridad además del aislamiento de red.
+
+\section{Procesamiento y detección}
+\subsection{Ventanas y variables}
+El flujo se agrega en ventanas de 10 s por origen con nueve variables (volumen, paquetes, destinos y puertos distintos, tasas, etc.) transformadas con $\log(1+x)$.
+
+\subsection{Partición temporal sin fuga}
+Las ventanas se ordenan en el tiempo y se dividen en entrenamiento (40\,\%, solo normal), validación (20\,\%) y prueba (resto). La prueba nunca se usa para ajustar nada.
+
+\subsection{Detectores, fusión y riesgo}
+Cuatro detectores (Z-Score, IQR, Isolation Forest, One-Class SVM) producen un puntaje calibrado $A_i=r/(r+s)$, donde $0{,}5$ corresponde al percentil 99 del entrenamiento. La fusión y el riesgo son
+\begin{equation}
+A_h = 0{,}6\sum_i w_iA_i + 0{,}4\max_i A_i,\qquad R = 100\,A_h\,(0{,}5+0{,}5\,C),
+\end{equation}
+con $C$ la criticidad del activo (\cmd{nodes} en el YAML).
+
+\subsection{Calibración del umbral de alerta}
+El umbral se elige solo con la validación y se acota a 30--70: si hay al menos tres ventanas anómalas se toma el que maximiza F1; si no, el percentil $1-\text{target\_fpr}$ de las ventanas normales.
+\begin{lstlisting}[language=Python]
+def calibrate_alert(risk_val, y_val, cfg_risk):
+    lo, hi = cfg_risk["alert_min"], cfg_risk["alert_max"]
+    if (y_val == 0).sum() < 10:
+        return cfg_risk["alert"], "config (validación insuficiente)"
+    if y_val.sum() >= 3:
+        best, best_f = lo, -1.0
+        for t in np.arange(lo, hi + 0.5, 0.5):
+            f = f1(y_val, risk_val >= t)
+            if f > best_f + 1e-9: best, best_f = t, f
+        return best, "validación (máx. F1)"
+    q = np.quantile(risk_val[y_val == 0], 1 - cfg_risk["target_fpr"])
+    return float(np.clip(q, lo, hi)), "validación (FPR objetivo)"
+\end{lstlisting}
+\codigo{Calibración con la ventana de validación (resumen de \cmd{src/run\_pipeline.py}).}{cod:calib}
+
+\subsection{Ejecución}
+\begin{lstlisting}[language=bash]
+make pipeline                       # sobre data/
+python -m src.run_pipeline --data data --no-calibrate
+python -m src.run_pipeline --data data --val-frac 0 --no-calibrate   # particion 40/60 original
+make dashboard
+\end{lstlisting}
+\codigo{Opciones del pipeline.}{cod:pipe}
+La salida \cmd{data/out/metrics.json} incluye precisión, \emph{recall}, F1, AUC, PR-AUC, FPR, MTTD, tasa de contención, acciones falsas, umbrales usados y el error del pronóstico frente a la línea base ingenua.
+
+\section{Respuesta escalonada y reversible}
+La Tabla~\ref{tab:resp} resume los niveles. Cada medida es un elemento con \emph{timeout} en un conjunto nftables, de modo que expira sola.
+
+\begin{table}[htbp]
+\centering
+\caption{Niveles de respuesta (valores de \cmd{config/lab.yaml})}
+\label{tab:resp}
+\footnotesize
+\begin{tabular}{@{}llll@{}}
+\toprule
+Riesgo & Medida & Conjunto & Duración \\
+\midrule
+$\ge$ alerta & Alerta & --- & --- \\
+$\ge$ 60 & Limitar tasa (20 pps) & \cmd{ratelimit} & 120 s \\
+$\ge$ 70 & Bloquear origen & \cmd{blocklist} & $\min(900,120+20(R-70))$ \\
+$\ge$ 85 & Aislar nodo & \cmd{isolate} & 600 s \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Los nodos de las zonas srv, dmz y mgmt (\cmd{protected\_zones}) nunca reciben acciones automáticas. Una medida vigente más débil se escala; una igual o más fuerte no se repite.
+\begin{lstlisting}
+table inet lab {
+  set ratelimit { type ipv4_addr; flags timeout; }
+  set blocklist { type ipv4_addr; flags timeout; }
+  set isolate   { type ipv4_addr; flags timeout; }
+  chain forward {
+    type filter hook forward priority 0; policy accept;
+    ip saddr @isolate  counter log prefix "LAB-ISOLATE " drop
+    ip daddr @isolate  counter log prefix "LAB-ISOLATE " drop
+    ip saddr @blocklist counter log prefix "LAB-BLOCK " drop
+    ip saddr @ratelimit limit rate over 20/second burst 20 packets counter log prefix "LAB-LIMIT " drop
+  }
+}
+\end{lstlisting}
+\codigo{Reglas del firewall (\cmd{infra/firewall/lab.nft}).}{cod:nft}
+\begin{lstlisting}[language=Python]
+def level(self, risk):
+    if risk >= self.isolate_risk: return "isolate"
+    if risk >= self.block_risk:   return "block"
+    if risk >= self.rate_limit_risk: return "rate_limit"
+    return None
+# comando emitido por Responder.handle():
+# nft add element inet lab blocklist { 172.30.2.99 timeout 300s }
+\end{lstlisting}
+\codigo{Selección del nivel y comando resultante (\cmd{src/response/policy.py}).}{cod:policy}
+
+Para aplicar las medidas sobre el firewall real: \cmd{python -m src.run\_pipeline {-}{-}data data {-}{-}live}; para observarlas: \cmd{make rules} o \cmd{docker exec lab-firewall nft list set inet lab blocklist}, donde se ve el tiempo restante de cada elemento hasta que desaparece.
+
+\section{Alerta temprana}
+Con una tendencia lineal sobre las últimas 4 ventanas se proyecta el riesgo 3 ventanas adelante y se emite una advertencia si cruza el umbral. El pipeline reporta además el MAE de la tendencia frente a la línea base ingenua (último valor); con datos sintéticos cortos la línea base puede ganar, y esa comparación se informa tal cual.
+
+\section{Pruebas automáticas}
+\begin{table}[htbp]
+\centering
+\caption{Cobertura de las pruebas (\cmd{make test})}
+\label{tab:tests}
+\footnotesize
+\begin{tabular}{@{}lp{5.4cm}@{}}
+\toprule
+Archivo & Qué verifica \\
+\midrule
+\cmd{test\_unit.py} & Configuración, ventanas, detectores, fusión, niveles y TTL de respuesta, nodos protegidos, calibración, pronóstico \\
+\cmd{test\_integracion.py} & Pipeline extremo a extremo, umbrales ordenados, modo 40/60, redes \cmd{internal}, nodos del compose frente al YAML, conjuntos nft, guardia de destino \\
+\bottomrule
+\end{tabular}
+\end{table}
+Las pruebas no requieren Docker; la verificación del aislamiento y del firewall en ejecución corresponde a \cmd{make verify}.
+
+\section{Lista de comprobación}
+\begin{enumerate}
+\item \cmd{make test}: todas las pruebas en verde.
+\item \cmd{make up} y \cmd{make verify}: sin fallas.
+\item 20--30 min de tráfico normal; luego \cmd{make scan}, \cmd{make brute}, \cmd{make exfil}.
+\item \cmd{make pipeline}; revisar \cmd{metrics.json} y el tablero.
+\item Con \cmd{{-}{-}live}, comprobar con \cmd{make rules} que las medidas aparecen y expiran.
+\item \cmd{make down} al terminar.
+\end{enumerate}
+
+\section{Limitaciones}
+Los resultados dependen de la duración de la línea base y del tamaño de la captura; con pocos datos la calibración del umbral intercambia \emph{recall} por precisión. Los datos son simulados y no sustituyen una evaluación en tráfico real.
+
+\end{document}

@@ -2,8 +2,11 @@
 import numpy as np
 import pandas as pd
 
+from src.config import CFG
 
-def add_forecast(df, window_s=10, history=4, horizon=3, alert_risk=50.0, max_gap=6):
+
+def add_forecast(df, window_s=10, history=CFG["forecast"]["history"], horizon=CFG["forecast"]["horizon"],
+                 alert_risk=50.0, max_gap=CFG["forecast"]["max_gap"]):
     """Agrega forecast_risk y early_warn a df (columnas: win, src, risk).
 
     Para cada punto ajusta una recta a las últimas `history` ventanas del mismo origen
@@ -31,3 +34,17 @@ def add_forecast(df, window_s=10, history=4, horizon=3, alert_risk=50.0, max_gap
     df["forecast_risk"] = fc
     df["early_warn"] = warn
     return df.sort_values(["win", "src"]).reset_index(drop=True)
+
+
+def forecast_error(df, window_s=10, horizon=CFG["forecast"]["horizon"]):
+    """Compara la proyección de tendencia con una línea base ingenua (persistencia: el riesgo futuro será
+    igual al actual). Devuelve el error absoluto medio de ambos sobre los pares (origen, ventana) cuya
+    ventana futura existe, y el número de pares evaluados."""
+    fut = df[["src", "win", "risk"]].copy()
+    fut["win"] = fut["win"] - horizon * window_s
+    m = df.merge(fut, on=["src", "win"], suffixes=("", "_real")).dropna(subset=["forecast_risk"])
+    if m.empty:
+        return {"pairs": 0, "mae_trend": None, "mae_naive": None}
+    return {"pairs": int(len(m)),
+            "mae_trend": round(float((m["forecast_risk"] - m["risk_real"]).abs().mean()), 3),
+            "mae_naive": round(float((m["risk"] - m["risk_real"]).abs().mean()), 3)}

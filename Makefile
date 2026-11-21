@@ -1,6 +1,15 @@
 COMPOSE = docker compose -f infra/docker-compose.yml
 
-.PHONY: up down status scan brute exfil rules flows synth pipeline pipeline-synth dashboard
+.PHONY: setup test verify up down status scan brute exfil rules flows synth pipeline pipeline-synth dashboard
+
+setup:         ## Prepara una VM Ubuntu (Docker + entorno virtual de Python)
+	bash scripts/setup_ubuntu.sh
+
+test:          ## Pruebas unitarias y de integración (no requieren Docker)
+	python -m pytest -q
+
+verify:        ## Verifica contenedores, aislamiento de Internet, firewall y captura
+	bash scripts/verify_lab.sh
 
 up:            ## Levanta toda la red simulada
 	$(COMPOSE) up -d --build

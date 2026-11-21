@@ -29,7 +29,7 @@ c1, c2, c3, c4 = st.columns(4)
 c1.metric("Ventanas evaluadas", metrics["windows_test"])
 c2.metric("Ventanas anómalas (etiquetadas)", metrics["anomalous_test"])
 c3.metric("Alertas", len(alerts))
-c4.metric("Bloqueos", len(actions))
+c4.metric("Acciones", len(actions))
 
 st.subheader("Riesgo por origen")
 if len(scores):
@@ -47,8 +47,15 @@ with left:
     cols = [c for c in ["win", "src", "label", "risk", "votes", "explanation"] if c in alerts]
     st.dataframe(alerts[cols] if len(alerts) else alerts)
 with right:
-    st.subheader("Acciones (bloqueos con reversión automática)")
+    st.subheader("Acciones (limitar, bloquear o aislar, con reversión automática)")
     st.dataframe(actions)
+
+if "thresholds" in metrics:
+    st.caption("Umbrales de riesgo usados: " + json.dumps(metrics["thresholds"]))
+extra = {k: metrics[k] for k in ("mttd_s", "containment_rate", "false_actions", "forecast_vs_naive") if k in metrics}
+if extra:
+    st.caption("MTTD, contención, acciones sobre origen sin escenario y pronóstico frente a la línea base: "
+               + json.dumps(extra))
 
 st.subheader("Alerta temprana")
 st.json(metrics.get("early_warning", []))
